@@ -1,5 +1,5 @@
 {
-  "name": "infiltrate",
+  "name": "inputfilter",
   "version": "0.1.0",
   "author": "Andrew Alegre",
   "main": "lib/index.js",
