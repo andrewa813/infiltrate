@@ -1,9 +1,16 @@
 {
   "name": "inputfilter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Andrew Alegre",
   "main": "lib/index.js",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/andrewa813/inputfilter.git"
+  },
+  "scripts": {
+    "test": "mocha --compilers coffee:coffee-script/register"
+  },
   "dependencies": {
     "lodash": "^4.15.0",
     "validator": "^5.6.0"

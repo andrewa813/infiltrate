@@ -2,70 +2,72 @@
 _ = require 'lodash'
 validator = require 'validator'
 
-class ObjectFilter
+class InputFilter
 	constructor: (opts) ->
 		_.assignInWith @, opts
 
 	array: ->
-		@is_array = true
-		@is_array_bound = false
+		@_array = {}
+		@_array.bound = false
 		switch arguments.length
 			when 1
-				@is_array_bound = true
-				[ @get_array_max ] = arguments
-				@get_array_min = @get_array_max
+				@_array._bound = true
+				[ @_array.max ] = arguments
+				@_array.min = @_array.max
 			when 2
-				@is_array_bound = true
-				[ @get_array_min, @get_array_max ] = arguments
+				@_array._bound = true
+				[ @_array.min, @_array.max ] = arguments
 		return @
 
-	optional: ->
-		@is_optional = true
+	optional: (defaultValue) ->
+		@_optional = {}
+		@_optional.defaultValue = defaultValue
 		return @
 
 	validate: (input) -> true
 	transform: (input) -> input
-	default: -> undefined
+
 	set: (option, value) ->
 		@[option] = value
+		return @
 
-ObjectFilter.mongoId = -> new ObjectFilter
+InputFilter.mongoId = -> new InputFilter
 	name: 'mongoId'
 	validate: (input) ->
 		return false unless _.isString input
 		return validator.isMongoId input
 
-ObjectFilter.number = -> new ObjectFilter
+InputFilter.number = -> new InputFilter
 	name: 'number'
 	validate: (input) ->
 		return validator.isInt input
 	transform: (input) ->
 		return validator.toInt input
 		
-ObjectFilter.email = -> new ObjectFilter
+InputFilter.email = -> new InputFilter
 	name: 'email'
 	validate: (input) ->
 		return false unless _.isString input
 		return validator.isEmail input
 
-ObjectFilter.enum = (list) -> new ObjectFilter
+InputFilter.enum = (list) -> new InputFilter
 	name: 'enum'
 	validate: (input) ->
 		return list.indexOf(input) >= 0
 
-ObjectFilter.string = -> new ObjectFilter
+InputFilter.string = -> new InputFilter
 	name: 'string'
 	validate: (input) ->
 		return _.isString input
 
-ObjectFilter.boolean = -> new ObjectFilter
+InputFilter.boolean = -> new InputFilter
 	name: 'boolean'
 	validate: (input) ->
 		return validator.isBoolean input
 	transform: (input) ->
 		return validator.toBoolean input, true
 
-ObjectFilter.uuid = -> new ObjectFilter
+InputFilter.uuid = -> new InputFilter
 	name: 'uuid'
 	validate: (input) ->
 		return false unless _.isString input
@@ -81,6 +83,7 @@ runImpl = (filter, input, data, keyPath, opts) ->
 
 		# Plain Object
 		if _.isPlainObject filterValue
+			
 			if _.isPlainObject inputValue
 				data[key] = {}
 				runImpl filterValue, inputValue, data[key], newKeyPath, opts
@@ -88,23 +91,23 @@ runImpl = (filter, input, data, keyPath, opts) ->
 				return { success: false, path: newKeyPath, reason: 'object' }
 
 		# Filter
-		else if filterValue instanceof ObjectFilter
+		else if filterValue instanceof InputFilter
 			
 			# Optional
 			if not inputValue
 				if filterValue.optional
-					defaultValue = filterValue.default()
+					defaultValue = filterValue.defaultValue
 					data[key] = defaultValue if defaultValue
 				else
 					return { success: false, path: newKeyPath, reason: 'required' }
 
 			# Array
-			if filterValue.is_array
+			if filterValue._array
 				if not _.isArray inputValue
 					return { success: false, path: newKeyPath, reason: 'array' }
 
-				if filterValue.is_array_bound
-					unless filterValue.get_array_min <= inputValue.length <= filterValue.get_array_max
+				if filterValue._array.bound
+					unless filterValue._array.min <= inputValue.length <= filterValue._array.max
 						return { success: false, path: newKeyPath, reason: 'array-length' }
 
 				data[key] = []
@@ -127,9 +130,18 @@ runImpl = (filter, input, data, keyPath, opts) ->
 
 	return { success: true, data: data }
 
-ObjectFilter.run = (filter, input, opts) ->
+InputFilter.run = (filter, input, opts) ->
 	return { success: false } unless _.isPlainObject filter
 	return { success: false } unless _.isPlainObject input
 	return runImpl filter, input, {}, '', opts
 
-module.exports = ObjectFilter
+InputFilter.middleware = (filter) ->
+	(req, res, next) ->
+		try
+			result = InputFilter.run filter, req.input
+			return next new Error result unless result?.success
+			next null
+		catch e
+			next e
+
+module.exports = InputFilter
