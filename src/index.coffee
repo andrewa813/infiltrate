@@ -49,6 +49,8 @@ InputFilter.email = -> new InputFilter
 	validate: (input) ->
 		return false unless _.isString input
 		return validator.isEmail input
+	transform: (input) ->
+		return input.toLowerCase()
 
 InputFilter.enum = (list) -> new InputFilter
 	name: 'enum'
