@@ -1,149 +1,110 @@
 
 _ = require 'lodash'
-validator = require 'validator'
+filters = []
+
+class Descriptor
+	constructor: (@type, @filter, @options, @optional) ->
+		
+class ArrayDescriptor
+	constructor: (@meta, @max, @min) ->
 
 class InputFilter
-	constructor: (opts) ->
-		_.assignInWith @, opts
+	prepare: (input, options) -> input
+	validate: (input, options) -> true
+	transform: (input, options) -> input
+	errorMessage: (type, keyPath, options) -> "Invalid input (#{type}) for path: #{keyPath}"
 
-	array: ->
-		@_array = {}
-		@_array.bound = false
-		switch arguments.length
-			when 1
-				@_array._bound = true
-				[ @_array.max ] = arguments
-				@_array.min = @_array.max
-			when 2
-				@_array._bound = true
-				[ @_array.min, @_array.max ] = arguments
-		return @
+class EnumFilter extends InputFilter
+	constructor: (@list) ->
+	validate: (input, options) -> @list.indexOf(input) >= 0
 
-	optional: (defaultValue) ->
-		@_optional = {}
-		@_optional.defaultValue = defaultValue
-		return @
+class InputError extends Error
+	constructor: (@field, @type, @message) ->
 
-	validate: (input) -> true
-	transform: (input) -> input
+$filter = (key, opts) ->
+	filter = unless _.isArray key then filters[key] else new EnumFilter key
+	new Descriptor key, filter, opts, false
 
-	set: (option, value) ->
-		@[option] = value
-		return @
+$filter.optional = (key, opts) ->
+	filter = unless _.isArray key then filters[key] else new EnumFilter key
+	new Descriptor key, filter, opts, true
 
-InputFilter.mongoId = -> new InputFilter
-	name: 'mongoId'
-	validate: (input) ->
-		return false unless _.isString input
-		return validator.isMongoId input
+$filter.register = (key, filter) ->
+	if _.isArray key
+		for item in key
+			filters[item] = filter
+	else if _.isString key
+		filters[key] = filter
 
-InputFilter.number = -> new InputFilter
-	name: 'number'
-	validate: (input) ->
-		return validator.isInt input
-	transform: (input) ->
-		return validator.toInt input
+$filter.array = ->
+	switch arguments.length
+		when 1 then [ meta ] = arguments
+		when 2 then [ max, meta ] = arguments
+		when 3 then [ min, max, meta ] = arguments
+	new ArrayDescriptor meta, max ? 0, min ? 0
+
+$filter.InputFilter = InputFilter
+$filter.InputError = InputError
+
+runFilter = (filter, value, keyPath, options) ->
+	value = filter.prepare value, options
+	unless filter.validate value, options
+		throw new InputError keyPath, "filter-#{metaField.type}",
+			filter.errorMessage(metaField.type, keyPath, options)
+	return filter.transform value, options
+
+runImpl = (meta, input, data, keyPath, opts) ->
+
+	for key, metaField of meta
+		value = input[key]
+		keyPath = if keyPath then "#{keyPath}.#{key}" else key
+		return runImpl metaField, input[key], data[key] = {}, keyPath if _.isPlainObject value
+
+		if metaField instanceof Descriptor
+			if (value is undefined or value is null) and not metaField.optional
+				throw new InputError keyPath, 'empty', "Field (#{keyPath}) must be defined."
+			data[key] = runFilter metaField.filter, value, keyPath, metaField.options
 		
-InputFilter.email = -> new InputFilter
-	name: 'email'
-	validate: (input) ->
-		return false unless _.isString input
-		return validator.isEmail input
-	transform: (input) ->
-		return input.toLowerCase()
-
-InputFilter.enum = (list) -> new InputFilter
-	name: 'enum'
-	validate: (input) ->
-		return list.indexOf(input) >= 0
-
-InputFilter.string = -> new InputFilter
-	name: 'string'
-	validate: (input) ->
-		return _.isString input
-
-InputFilter.boolean = -> new InputFilter
-	name: 'boolean'
-	validate: (input) ->
-		return validator.isBoolean input
-	transform: (input) ->
-		return validator.toBoolean input, true
-
-InputFilter.uuid = -> new InputFilter
-	name: 'uuid'
-	validate: (input) ->
-		return false unless _.isString input
-		return validator.isUUID input
-
-runImpl = (filter, input, data, keyPath, opts) ->
-
-	for key, filterValue of filter
-		inputValue = input[key]
-
-		newKeyPath = if keyPath then "#{keyPath}." else ''
-		newKeyPath = "#{newKeyPath}#{key}"
-
-		# Plain Object
-		if _.isPlainObject filterValue
+		else if metaField instanceof ArrayDescriptor
+			if (value is undefined or value is null) and _.isInteger metaField.min
+				throw new InputError keyPath, 'empty', "Field (#{keyPath}) must be a valid array."
+			unless _.isArray value
+				throw new InputError keyPath, 'array', "Field (#{keyPath}) must be a valid array."
+			if metaField.min > 0 and value.length < metaField.min
+				throw new InputError keyPath, 'array', "Array (#{keyPath}) length must be greater than #{min}."
+			if metaField.max > 0 and value.length > metaField.max
+				throw new InputError keyPath, 'array', "Array (#{keyPath}) length must be less than #{mx}."
 			
-			if _.isPlainObject inputValue
-				data[key] = {}
-				runImpl filterValue, inputValue, data[key], newKeyPath, opts
+			meta = metaField.meta
+			data[key] = []
+			
+			if _.isString meta
+				filter = $filter meta
+				for index in [0..value.length - 1]
+					data[key][index] = runFilter filter, value[key], "#{keyPath}[#{index}]", {}
+			
+			else if _.isPlainObject meta
+				for index in [0..value.length - 1]
+					runImpl meta, value[index], data[key][index] ?= {}, "#{keyPath}[#{index}]"
+			
 			else
-				return { success: false, path: newKeyPath, reason: 'object' }
-
-		# Filter
-		else if filterValue instanceof InputFilter
+				throw new InputError keyPath, 'array', "Field at '#keyPath' has an invalid descriptor."
 			
-			# Optional
-			if not inputValue
-				if filterValue.optional
-					defaultValue = filterValue.defaultValue
-					data[key] = defaultValue if defaultValue
-				else
-					return { success: false, path: newKeyPath, reason: 'required' }
+		else
+			throw new InputError keyPath, 'invalid', "Unsupported filter descriptor: #{metaField}"
 
-			# Array
-			if filterValue._array
-				if not _.isArray inputValue
-					return { success: false, path: newKeyPath, reason: 'array' }
+$filter.run = (filter, input, opts) ->
+	data = {}
+	runImpl filter, input, data, '', opts
+	return data
 
-				if filterValue._array.bound
-					unless filterValue._array.min <= inputValue.length <= filterValue._array.max
-						return { success: false, path: newKeyPath, reason: 'array-length' }
-
-				data[key] = []
-				for inputValueElement, index in inputValue
-					valid = filterValue.validate inputValueElement
-					return { success: false, path: newKeyPath, reason: 'invalid', index: index } unless valid
-					newValue = filterValue.transform inputValueElement
-					data[key][index] = newValue
-			
-			# Single
-			else
-				valid = filterValue.validate inputValue
-				return { success: false, path: newKeyPath, reason: 'invalid' } unless valid
-				newValue = filterValue.transform inputValue
-				data[key] = newValue
-
-		# Others
-		#else
-		# TODO: Filter Error
-
-	return { success: true, data: data }
-
-InputFilter.run = (filter, input, opts) ->
-	return { success: false } unless _.isPlainObject filter
-	return { success: false } unless _.isPlainObject input
-	return runImpl filter, input, {}, '', opts
-
-InputFilter.middleware = (filter) ->
+$filter.middleware = (filter) ->
 	(req, res, next) ->
 		try
-			result = InputFilter.run filter, req.input
-			return next new Error result unless result?.success
+			req.input = $filter.run filter, req.input
 			next null
 		catch e
 			next e
 
-module.exports = InputFilter
+require('./builtin') $filter
+module.exports = $filter

@@ -1,18 +1,31 @@
 
 assert = require 'assert'
-ObjectFilter = require '../src/index'
+$filter = require '../src/index'
 
 describe 'Numbers', ->
 
-	it 'should filter a number in string', (done) ->
+	it 'should filter an integer in string', (done) ->
 
 		filter =
-			'count': ObjectFilter.number()
+			'count': $filter 'integer'
 		
 		input =
 			'count': '125635'
 
-		result = ObjectFilter.run filter, input
-		assert result.success
-		assert.equal result.data.count, 125635
+		result = $filter.run filter, input
+		assert.equal result.count, 125635
+		done()
+	
+	it 'should filter based on array', (done) ->
+		filter =
+			'count': $filter.array
+				'test': $filter 'integer'
+		
+		input =
+			'count': [
+				'test': '509999'
+			]
+		
+		result = $filter.run filter, input
+		assert.equal result.count[0].test, 509999
 		done()
